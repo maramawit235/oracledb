@@ -1,0 +1,11 @@
+# Oracle Database Health Monitoring & Performance Optimization Suite
+# Python 3.11+ Dependencies
+
+oracledb>=2.0.0          # Thin-mode Oracle DB driver for Python
+requests>=2.31.0          # HTTP library for Prometheus API and Webhooks
+pyyaml>=6.0.1             # YAML configuration parser for rule engine
+fastapi>=0.109.0          # High-performance async REST API framework
+uvicorn[standard]>=0.27.0 # ASGI server for running FastAPI
+jinja2>=3.1.3             # Templating engine for HTML report generation
+pytest>=8.0.0             # Testing framework for unit/mock testing
+pydantic>=2.6.0           # Data validation library for API endpoints

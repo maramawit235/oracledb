@@ -1,0 +1,6 @@
+{
+  "name": "Oracle DB Health & Performance Suite",
+  "description": "Enterprise Oracle Database monitoring, Prometheus integration, direct SQL fallback, rule-based health scoring, alerts, and automated report generator for Oracle 19c & XE.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

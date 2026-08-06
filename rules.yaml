@@ -1,0 +1,63 @@
+# ==============================================================================
+# Oracle Database Health Monitoring & Performance Optimization Suite
+# Configuration: rules.yaml
+# Description: Configurable rule definitions, weights, and recommendation thresholds
+# ==============================================================================
+
+version: "1.0"
+
+settings:
+  base_health_score: 100
+  warning_penalty_factor: 0.5   # Deducts 50% of weight for WARNING severity
+  critical_penalty_factor: 1.0  # Deducts 100% of weight for CRITICAL severity
+
+rules:
+  - id: "RULE_TABLESPACE_USERS"
+    name: "USERS Tablespace Capacity"
+    metric_type: "tablespace"
+    target: "USERS"
+    warning_threshold: 85.0
+    critical_threshold: 95.0
+    weight: 25.0
+    unit: "%"
+    recommendation: "Resize datafile or add new datafile to USERS tablespace. Purge or compress historical partition data."
+
+  - id: "RULE_TABLESPACE_SYSTEM"
+    name: "SYSTEM Tablespace Capacity"
+    metric_type: "tablespace"
+    target: "SYSTEM"
+    warning_threshold: 85.0
+    critical_threshold: 92.0
+    weight: 20.0
+    unit: "%"
+    recommendation: "Investigate audit trail growth (AUD$) or system object fragmentation. Do not allow SYSTEM tablespace to fill up."
+
+  - id: "RULE_ACTIVE_SESSIONS"
+    name: "Active Database Sessions"
+    metric_type: "active_sessions"
+    target: "global"
+    warning_threshold: 25.0
+    critical_threshold: 50.0
+    weight: 20.0
+    unit: "sessions"
+    recommendation: "Check V$SESSION for unindexed queries, runaway loops, or connection pool leakage from application servers."
+
+  - id: "RULE_BLOCKED_SESSIONS"
+    name: "Row Lock / Enqueue Contention"
+    metric_type: "blocked_sessions"
+    target: "global"
+    warning_threshold: 1.0
+    critical_threshold: 5.0
+    weight: 25.0
+    unit: "blocked sessions"
+    recommendation: "Identify blocking SID via V$LOCK and consider terminating blocking uncommitted session (ALTER SYSTEM KILL SESSION)."
+
+  - id: "RULE_WAIT_EVENT_LATENCY"
+    name: "Top System Wait Event Latency"
+    metric_type: "wait_event"
+    target: "global"
+    warning_threshold: 500.0
+    critical_threshold: 1500.0
+    weight: 10.0
+    unit: "ms"
+    recommendation: "High I/O wait latency detected. Tune slow SQL_IDs causing excessive physical reads or optimize redo log buffer size."

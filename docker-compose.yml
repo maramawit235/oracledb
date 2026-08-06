@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 1. Oracle Database Exporter
+  oracledb-exporter:
+    image: iamseth/oracledb_exporter:latest
+    container_name: oracle_exporter
+    environment:
+      DATA_SOURCE_NAME: "monitor/MonitorPass123#@oracle-db:1521/XE"
+      CUSTOM_METRICS: "/etc/oracledb_exporter/custom-metrics.toml"
+    ports:
+      - "9161:9161"
+    restart: always
+
+  # 2. Prometheus Monitoring Server
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus_server
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: always
+
+  # 3. Python Health Suite API & Monitoring Service
+  python-monitoring-app:
+    build: .
+    container_name: oracle_monitoring_suite
+    ports:
+      - "8000:8000"
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+      - ORACLE_USER=monitor
+      - ORACLE_PASSWORD=MonitorPass123#
+      - ORACLE_DSN=oracle-db:1521/XE
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    depends_on:
+      - prometheus
+      - oracledb-exporter
+    restart: always
