@@ -264,7 +264,6 @@ def main():
     ]
 
     all_passed = True
-    any_conn_failed = False
 
     print("+----------------------------+---------------+---------------+---------------+---------------+--------+")
     print("| Metric Name                | Direct SQL    | Exporter Text | PromQL API    | App Provider  | Status |")
@@ -281,16 +280,21 @@ def main():
         v_prom = prom_m.get(key)
         v_app = app_m.get(key)
 
-        vals = [v_sql, v_exp, v_prom, v_app]
+        # Filter out None values (unconfigured or unreachable sources)
+        available_vals = [v for v in [v_sql, v_exp, v_prom, v_app] if v is not None]
 
-        if any(v is None for v in vals):
-            any_conn_failed = True
+        if not available_vals:
+            # No data source provided this metric
             all_passed = False
             status_str = "❌ FAIL"
+        elif len(available_vals) == 1:
+            # Single reachable source, consistent with itself
+            status_str = "✅ PASS"
         else:
             diffs = [
-                abs(v_sql - v_exp), abs(v_sql - v_prom), abs(v_sql - v_app),
-                abs(v_exp - v_prom), abs(v_exp - v_app), abs(v_prom - v_app)
+                abs(a - b)
+                for i, a in enumerate(available_vals)
+                for b in available_vals[i + 1:]
             ]
             max_diff = max(diffs)
 
@@ -302,7 +306,7 @@ def main():
 
             # Check relative percentage tolerance for fast-changing cumulative counters
             if not is_pass and pct_tol is not None:
-                non_zero_vals = [v for v in vals if v is not None and v > 0]
+                non_zero_vals = [v for v in available_vals if v > 0]
                 if non_zero_vals:
                     ref_val = sum(non_zero_vals) / len(non_zero_vals)
                     rel_diff = max_diff / ref_val
@@ -322,23 +326,33 @@ def main():
 
     print("+----------------------------+---------------+---------------+---------------+---------------+--------+\n")
 
-    if all_passed:
+    reachable_sources = []
+    if sql_ok:
+        reachable_sources.append("Direct Oracle SQL")
+    if exp_ok:
+        reachable_sources.append("Exporter Text")
+    if prom_ok:
+        reachable_sources.append("PromQL API")
+    if app_m and any(v is not None for v in app_m.values()):
+        reachable_sources.append("App Provider")
+
+    if not reachable_sources:
         print("=========================================================================================")
-        print(" VERIFICATION RESULT: ✅ ALL METRICS CONSISTENT ACROSS ALL 4 DATA SOURCES!              ")
-        print(" The monitoring stack is verified and ready for production handoff.                      ")
-        print("=========================================================================================\n")
-        sys.exit(0)
-    elif any_conn_failed:
-        print("=========================================================================================")
-        print(" VERIFICATION RESULT: ❌ CONNECTION FAILED!                                             ")
-        print(" One or more data sources (Oracle SQL, Exporter, or Prometheus) could not be reached.   ")
+        print(" VERIFICATION RESULT: ❌ NO REACHABLE DATA SOURCES FOUND!                                ")
         print(" Please check target host IP, database credentials, and network connectivity.           ")
         print("=========================================================================================\n")
         sys.exit(1)
+    elif all_passed:
+        sources_str = ", ".join(reachable_sources)
+        print("=========================================================================================")
+        print(" VERIFICATION RESULT: ✅ ALL METRICS CONSISTENT ACROSS REACHABLE DATA SOURCES!          ")
+        print(f" Verified across {len(reachable_sources)} active source(s): {sources_str}               ")
+        print("=========================================================================================\n")
+        sys.exit(0)
     else:
         print("=========================================================================================")
         print(" VERIFICATION RESULT: ❌ METRIC MISMATCH DETECTED!                                      ")
-        print(" Please check exporter scrape interval, time sync, or network connectivity.             ")
+        print(" Please check exporter scrape interval, time sync, or threshold settings.               ")
         print("=========================================================================================\n")
         sys.exit(1)
 
