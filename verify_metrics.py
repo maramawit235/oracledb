@@ -11,37 +11,91 @@ import os
 import sys
 import time
 import requests
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 # Import app providers
-from providers import OracleSQLProvider, PrometheusProvider
+from providers import OracleSQLProvider, PrometheusProvider, get_provider, MetricsUnavailableError
 
 
-def fetch_direct_sql_metrics(config: dict) -> Dict[str, float]:
-    """Queries Oracle directly via SQL."""
+def fetch_direct_sql_metrics(config: dict) -> Dict[str, Optional[float]]:
+    """Queries Oracle directly via SQL. Returns None for metric values if connection fails."""
+    metrics: Dict[str, Optional[float]] = {
+        "active_sessions": None,
+        "users_tablespace_pct": None,
+        "execute_count": None
+    }
+    user = config.get("ORACLE_USER", "monitor")
+    password = config.get("ORACLE_PASSWORD", "")
+    dsn = config.get("ORACLE_DSN", "")
+
+    if not dsn or not user:
+        return metrics
+
     try:
         provider = OracleSQLProvider(
-            user=config.get("ORACLE_USER", "monitor"),
-            password=config.get("ORACLE_PASSWORD", "MonitorPass123#"),
-            dsn=config.get("ORACLE_DSN", "localhost:1521/XE")
+            user=user,
+            password=password,
+            dsn=dsn,
+            timeout=3
         )
-        active_sessions = float(provider.get_active_sessions())
-        tablespaces = provider.get_tablespace_usage()
-        users_ts = next((t for t in tablespaces if t["name"] == "USERS"), tablespaces[0] if tablespaces else {"used_pct": 0.0})
-        sysstat = provider.get_sysstat("execute count")
-        return {
-            "active_sessions": active_sessions,
-            "users_tablespace_pct": float(users_ts["used_pct"]),
-            "execute_count": float(sysstat)
-        }
-    except Exception as e:
-        # Return standard reference metrics for validation test
-        return {"active_sessions": 12.0, "users_tablespace_pct": 88.4, "execute_count": 1250000.0}
+        conn = provider._get_connection()
+        if not conn:
+            return metrics
+
+        with conn.cursor() as cur:
+            # Active sessions
+            try:
+                cur.execute("SELECT COUNT(*) FROM V$SESSION WHERE STATUS = 'ACTIVE' AND TYPE = 'USER'")
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    metrics["active_sessions"] = float(row[0])
+            except Exception:
+                pass
+
+            # USERS tablespace percentage
+            try:
+                cur.execute("""
+                    SELECT ROUND(m.used_percent, 2)
+                    FROM dba_tablespace_usage_metrics m
+                    WHERE m.tablespace_name = 'USERS'
+                """)
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    metrics["users_tablespace_pct"] = float(row[0])
+            except Exception:
+                pass
+
+            # sysstat execute count
+            try:
+                cur.execute("SELECT value FROM V$SYSSTAT WHERE name = 'execute count'")
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    metrics["execute_count"] = float(row[0])
+            except Exception:
+                pass
+
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    except Exception:
+        # Never substitute fake fallback numbers on connection failure
+        pass
+
+    return metrics
 
 
-def fetch_exporter_raw_metrics(exporter_url: str) -> Dict[str, float]:
+def fetch_exporter_raw_metrics(exporter_url: str) -> Dict[str, Optional[float]]:
     """Scrapes raw text metrics from oracledb_exporter /metrics endpoint."""
-    metrics = {"active_sessions": 12.0, "users_tablespace_pct": 88.4, "execute_count": 1250000.0}
+    metrics: Dict[str, Optional[float]] = {
+        "active_sessions": None,
+        "users_tablespace_pct": None,
+        "execute_count": None
+    }
+    if not exporter_url or not exporter_url.strip():
+        return metrics
+
     try:
         resp = requests.get(f"{exporter_url.rstrip('/')}/metrics", timeout=3)
         if resp.status_code == 200:
@@ -49,29 +103,85 @@ def fetch_exporter_raw_metrics(exporter_url: str) -> Dict[str, float]:
                 if line.startswith('#'):
                     continue
                 if 'oracledb_sessions_value{status="ACTIVE"}' in line or 'oracledb_sessions_value' in line:
-                    metrics["active_sessions"] = float(line.split()[-1])
+                    try:
+                        metrics["active_sessions"] = float(line.split()[-1])
+                    except ValueError:
+                        pass
                 elif 'oracledb_tablespace_used_percentage{tablespace="USERS"}' in line:
-                    metrics["users_tablespace_pct"] = float(line.split()[-1])
+                    try:
+                        metrics["users_tablespace_pct"] = float(line.split()[-1])
+                    except ValueError:
+                        pass
                 elif 'oracledb_sysstat_value{name="execute count"}' in line:
-                    metrics["execute_count"] = float(line.split()[-1])
+                    try:
+                        metrics["execute_count"] = float(line.split()[-1])
+                    except ValueError:
+                        pass
     except Exception:
         pass
+
     return metrics
 
 
-def fetch_promql_api_metrics(prom_url: str) -> Dict[str, float]:
+def fetch_promql_api_metrics(prom_url: str) -> Dict[str, Optional[float]]:
     """Queries Prometheus HTTP API using PromQL."""
-    metrics = {"active_sessions": 12.0, "users_tablespace_pct": 88.4, "execute_count": 1250000.0}
+    metrics: Dict[str, Optional[float]] = {
+        "active_sessions": None,
+        "users_tablespace_pct": None,
+        "execute_count": None
+    }
+    if not prom_url or not prom_url.strip():
+        return metrics
+
     try:
-        prom = PrometheusProvider(prometheus_url=prom_url)
-        metrics["active_sessions"] = float(prom.get_active_sessions())
-        ts = prom.get_tablespace_usage()
-        users_ts = next((t for t in ts if t["name"] == "USERS"), ts[0] if ts else {"used_pct": 0.0})
-        metrics["users_tablespace_pct"] = float(users_ts["used_pct"])
-        metrics["execute_count"] = float(prom.get_sysstat("execute count"))
+        prom = PrometheusProvider(prometheus_url=prom_url, timeout=3)
+        if not prom.health_check():
+            return metrics
+
+        # Query active sessions
+        res = prom._execute_promql('oracledb_sessions_value{status="ACTIVE"}')
+        if res:
+            metrics["active_sessions"] = float(res[0]["value"][1])
+
+        # Query tablespace usage
+        res = prom._execute_promql('oracledb_tablespace_used_percentage{tablespace="USERS"}')
+        if res:
+            metrics["users_tablespace_pct"] = float(res[0]["value"][1])
+
+        # Query sysstat execute count
+        res = prom._execute_promql('oracledb_sysstat_value{name="execute count"}')
+        if res:
+            metrics["execute_count"] = float(res[0]["value"][1])
+
     except Exception:
         pass
+
     return metrics
+
+
+def fetch_app_provider_metrics(config: dict) -> Dict[str, Optional[float]]:
+    """Queries active App MetricsProvider via Factory."""
+    metrics: Dict[str, Optional[float]] = {
+        "active_sessions": None,
+        "users_tablespace_pct": None,
+        "execute_count": None
+    }
+    try:
+        provider = get_provider(config)
+        if isinstance(provider, OracleSQLProvider):
+            return fetch_direct_sql_metrics(config)
+        elif isinstance(provider, PrometheusProvider):
+            return fetch_promql_api_metrics(config.get("PROMETHEUS_URL", ""))
+    except Exception:
+        pass
+
+    return metrics
+
+
+def fmt_val(val: Optional[float]) -> str:
+    if val is None:
+        return "N/A"
+    return f"{val:.1f}"
 
 
 def main():
@@ -81,54 +191,72 @@ def main():
 
     config = {
         "ORACLE_USER": os.getenv("ORACLE_USER", "monitor"),
-        "ORACLE_PASSWORD": os.getenv("ORACLE_PASSWORD", "MonitorPass123#"),
-        "ORACLE_DSN": os.getenv("ORACLE_DSN", "localhost:1521/XE"),
-        "EXPORTER_URL": os.getenv("EXPORTER_URL", "http://localhost:9161"),
-        "PROMETHEUS_URL": os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+        "ORACLE_PASSWORD": os.getenv("ORACLE_PASSWORD", ""),
+        "ORACLE_DSN": os.getenv("ORACLE_DSN", ""),
+        "EXPORTER_URL": os.getenv("EXPORTER_URL", ""),
+        "PROMETHEUS_URL": os.getenv("PROMETHEUS_URL", "")
     }
 
-    print(f"[INFO] Target Oracle DSN: {config['ORACLE_DSN']}")
-    print(f"[INFO] Target Exporter:   {config['EXPORTER_URL']}")
-    print(f"[INFO] Target Prometheus: {config['PROMETHEUS_URL']}\n")
+    print(f"[INFO] Target Oracle DSN: {config['ORACLE_DSN'] or '(Not configured)'}")
+    print(f"[INFO] Target Exporter:   {config['EXPORTER_URL'] or '(Not configured)'}")
+    print(f"[INFO] Target Prometheus: {config['PROMETHEUS_URL'] or '(Not configured)'}\n")
 
     print("[1/4] Querying Direct Oracle SQL...")
     sql_m = fetch_direct_sql_metrics(config)
+    sql_ok = any(v is not None for v in sql_m.values())
+    print(f"      Status: {'CONNECTED' if sql_ok else 'FAILED (N/A)'}")
 
     print("[2/4] Parsing Exporter /metrics endpoint...")
     exp_m = fetch_exporter_raw_metrics(config["EXPORTER_URL"])
+    exp_ok = any(v is not None for v in exp_m.values())
+    print(f"      Status: {'CONNECTED' if exp_ok else 'FAILED (N/A)'}")
 
     print("[3/4] Querying Prometheus PromQL API...")
     prom_m = fetch_promql_api_metrics(config["PROMETHEUS_URL"])
+    prom_ok = any(v is not None for v in prom_m.values())
+    print(f"      Status: {'CONNECTED' if prom_ok else 'FAILED (N/A)'}")
 
     print("[4/4] Comparing app provider interfaces...\n")
+    app_m = fetch_app_provider_metrics(config)
 
-    # Metrics list to test
     test_metrics = [
-        ("Active Sessions (Count)", "active_sessions", 2.0), # max allowed diff
+        ("Active Sessions (Count)", "active_sessions", 2.0),
         ("USERS Tablespace Used (%)", "users_tablespace_pct", 1.5),
         ("SYSSTAT Execute Count", "execute_count", 50000.0)
     ]
 
     all_passed = True
+    any_conn_failed = False
 
     print("+----------------------------+---------------+---------------+---------------+---------------+--------+")
     print("| Metric Name                | Direct SQL    | Exporter Text | PromQL API    | App Provider  | Status |")
     print("+----------------------------+---------------+---------------+---------------+---------------+--------+")
 
     for label, key, tolerance in test_metrics:
-        v_sql = sql_m.get(key, 0.0)
-        v_exp = exp_m.get(key, 0.0)
-        v_prom = prom_m.get(key, 0.0)
-        v_app = v_prom # provider output matches PromQL/SQL
+        v_sql = sql_m.get(key)
+        v_exp = exp_m.get(key)
+        v_prom = prom_m.get(key)
+        v_app = app_m.get(key)
 
-        diff = max(abs(v_sql - v_exp), abs(v_sql - v_prom), abs(v_sql - v_app))
-        is_pass = diff <= tolerance
+        vals = [v_sql, v_exp, v_prom, v_app]
 
-        if not is_pass:
+        if any(v is None for v in vals):
+            any_conn_failed = True
             all_passed = False
+            status_str = "❌ FAIL"
+        else:
+            diff = max(abs(v_sql - v_exp), abs(v_sql - v_prom), abs(v_sql - v_app))
+            is_pass = diff <= tolerance
+            if not is_pass:
+                all_passed = False
+            status_str = "✅ PASS" if is_pass else "❌ FAIL"
 
-        status_str = "✅ PASS" if is_pass else "❌ FAIL"
-        print(f"| {label:<26} | {v_sql:<13.1f} | {v_exp:<13.1f} | {v_prom:<13.1f} | {v_app:<13.1f} | {status_str:<6} |")
+        s_sql = fmt_val(v_sql)
+        s_exp = fmt_val(v_exp)
+        s_prom = fmt_val(v_prom)
+        s_app = fmt_val(v_app)
+
+        print(f"| {label:<26} | {s_sql:<13} | {s_exp:<13} | {s_prom:<13} | {s_app:<13} | {status_str:<6} |")
 
     print("+----------------------------+---------------+---------------+---------------+---------------+--------+\n")
 
@@ -138,6 +266,13 @@ def main():
         print(" The monitoring stack is verified and ready for production handoff.                      ")
         print("=========================================================================================\n")
         sys.exit(0)
+    elif any_conn_failed:
+        print("=========================================================================================")
+        print(" VERIFICATION RESULT: ❌ CONNECTION FAILED!                                             ")
+        print(" One or more data sources (Oracle SQL, Exporter, or Prometheus) could not be reached.   ")
+        print(" Please check target host IP, database credentials, and network connectivity.           ")
+        print("=========================================================================================\n")
+        sys.exit(1)
     else:
         print("=========================================================================================")
         print(" VERIFICATION RESULT: ❌ METRIC MISMATCH DETECTED!                                      ")
@@ -148,3 +283,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
