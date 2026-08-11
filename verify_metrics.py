@@ -236,10 +236,31 @@ def main():
     print("[4/4] Comparing app provider interfaces...\n")
     app_m = fetch_app_provider_metrics(config)
 
+    counter_pct_tol = float(os.getenv("COUNTER_TOLERANCE_PCT", "0.01"))      # Default 1% relative tolerance
+    counter_abs_tol = float(os.getenv("COUNTER_TOLERANCE_DELTA", "50000.0"))  # Configurable absolute delta
+
     test_metrics = [
-        ("Active Sessions (Count)", "active_sessions", 2.0),
-        ("USERS Tablespace Used (%)", "users_tablespace_pct", 1.5),
-        ("SYSSTAT Execute Count", "execute_count", 50000.0)
+        {
+            "label": "Active Sessions (Count)",
+            "key": "active_sessions",
+            "abs_tol": 2.0,
+            "pct_tol": None,
+            "type": "gauge"
+        },
+        {
+            "label": "USERS Tablespace Used (%)",
+            "key": "users_tablespace_pct",
+            "abs_tol": 1.5,
+            "pct_tol": None,
+            "type": "gauge"
+        },
+        {
+            "label": "SYSSTAT Execute Count",
+            "key": "execute_count",
+            "abs_tol": counter_abs_tol,
+            "pct_tol": counter_pct_tol,
+            "type": "counter"
+        }
     ]
 
     all_passed = True
@@ -249,7 +270,12 @@ def main():
     print("| Metric Name                | Direct SQL    | Exporter Text | PromQL API    | App Provider  | Status |")
     print("+----------------------------+---------------+---------------+---------------+---------------+--------+")
 
-    for label, key, tolerance in test_metrics:
+    for item in test_metrics:
+        label = item["label"]
+        key = item["key"]
+        abs_tol = item["abs_tol"]
+        pct_tol = item["pct_tol"]
+
         v_sql = sql_m.get(key)
         v_exp = exp_m.get(key)
         v_prom = prom_m.get(key)
@@ -262,8 +288,27 @@ def main():
             all_passed = False
             status_str = "❌ FAIL"
         else:
-            diff = max(abs(v_sql - v_exp), abs(v_sql - v_prom), abs(v_sql - v_app))
-            is_pass = diff <= tolerance
+            diffs = [
+                abs(v_sql - v_exp), abs(v_sql - v_prom), abs(v_sql - v_app),
+                abs(v_exp - v_prom), abs(v_exp - v_app), abs(v_prom - v_app)
+            ]
+            max_diff = max(diffs)
+
+            is_pass = False
+
+            # Check absolute tolerance
+            if abs_tol is not None and max_diff <= abs_tol:
+                is_pass = True
+
+            # Check relative percentage tolerance for fast-changing cumulative counters
+            if not is_pass and pct_tol is not None:
+                non_zero_vals = [v for v in vals if v is not None and v > 0]
+                if non_zero_vals:
+                    ref_val = sum(non_zero_vals) / len(non_zero_vals)
+                    rel_diff = max_diff / ref_val
+                    if rel_diff <= pct_tol:
+                        is_pass = True
+
             if not is_pass:
                 all_passed = False
             status_str = "✅ PASS" if is_pass else "❌ FAIL"
