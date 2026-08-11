@@ -26,9 +26,12 @@ def fetch_direct_sql_metrics(config: dict) -> Dict[str, Optional[float]]:
     }
     user = config.get("ORACLE_USER", "monitor")
     password = config.get("ORACLE_PASSWORD", "")
+    host = config.get("ORACLE_HOST", "10.73.34.37")
+    port = config.get("ORACLE_PORT", "1521")
+    service_name = config.get("ORACLE_SERVICE_NAME", "XEPDB1")
     dsn = config.get("ORACLE_DSN", "")
 
-    if not dsn or not user:
+    if not user:
         return metrics
 
     try:
@@ -36,6 +39,9 @@ def fetch_direct_sql_metrics(config: dict) -> Dict[str, Optional[float]]:
             user=user,
             password=password,
             dsn=dsn,
+            host=host,
+            port=port,
+            service_name=service_name,
             timeout=3
         )
         conn = provider._get_connection()
@@ -190,6 +196,9 @@ def main():
     print("=========================================================================================\n")
 
     config = {
+        "ORACLE_HOST": os.getenv("ORACLE_HOST", "10.73.34.37"),
+        "ORACLE_PORT": os.getenv("ORACLE_PORT", "1521"),
+        "ORACLE_SERVICE_NAME": os.getenv("ORACLE_SERVICE_NAME", "XEPDB1"),
         "ORACLE_USER": os.getenv("ORACLE_USER", "monitor"),
         "ORACLE_PASSWORD": os.getenv("ORACLE_PASSWORD", ""),
         "ORACLE_DSN": os.getenv("ORACLE_DSN", ""),
@@ -197,7 +206,15 @@ def main():
         "PROMETHEUS_URL": os.getenv("PROMETHEUS_URL", "")
     }
 
-    print(f"[INFO] Target Oracle DSN: {config['ORACLE_DSN'] or '(Not configured)'}")
+    raw_dsn = config["ORACLE_DSN"]
+    if raw_dsn and "@" in raw_dsn:
+        display_dsn = raw_dsn.split("@")[-1]
+    elif raw_dsn:
+        display_dsn = raw_dsn
+    else:
+        display_dsn = f"{config['ORACLE_HOST']}:{config['ORACLE_PORT']}/{config['ORACLE_SERVICE_NAME']}"
+
+    print(f"[INFO] Target Oracle DSN: {display_dsn}")
     print(f"[INFO] Target Exporter:   {config['EXPORTER_URL'] or '(Not configured)'}")
     print(f"[INFO] Target Prometheus: {config['PROMETHEUS_URL'] or '(Not configured)'}\n")
 

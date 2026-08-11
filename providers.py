@@ -188,12 +188,39 @@ class OracleSQLProvider(MetricsProvider):
     Always set tcp_connect_timeout and expire_time explicitly during connection establishment.
     """
 
-    def __init__(self, user: str, password: str, dsn: str, timeout: int = 5):
+    def __init__(
+        self,
+        user: str,
+        password: str,
+        dsn: str = "",
+        host: str = "10.73.34.37",
+        port: str = "1521",
+        service_name: str = "XEPDB1",
+        timeout: int = 5
+    ):
         self.user = user
         self.password = password
         self.dsn = dsn
+        self.host = host
+        self.port = port
+        self.service_name = service_name
         self.timeout = timeout
         self._oracledb = None
+
+    def _get_clean_dsn(self) -> str:
+        """Strips username/password from DSN if embedded, or builds host:port/service string."""
+        if self.dsn and self.dsn.strip():
+            dsn_str = self.dsn.strip()
+            if "@" in dsn_str:
+                dsn_str = dsn_str.split("@")[-1]
+            if dsn_str.startswith("//"):
+                dsn_str = dsn_str[2:]
+            return dsn_str
+        
+        host = self.host or "10.73.34.37"
+        port = self.port or "1521"
+        service = self.service_name or "XEPDB1"
+        return f"{host}:{port}/{service}"
 
     def _get_connection(self):
         """Lazy connection initializer with explicit connection timeout enforcement."""
@@ -204,12 +231,13 @@ class OracleSQLProvider(MetricsProvider):
             logger.warning("[OracleSQLProvider] python-oracledb library not installed. Operating in simulated SQL mode.")
             return None
 
+        clean_dsn = self._get_clean_dsn()
         try:
             # Enforce tcp_connect_timeout explicitly to prevent silent socket hanging
             conn = self._oracledb.connect(
                 user=self.user,
                 password=self.password,
-                dsn=self.dsn,
+                dsn=clean_dsn,
                 tcp_connect_timeout=self.timeout,
                 expire_time=2
             )
@@ -218,8 +246,8 @@ class OracleSQLProvider(MetricsProvider):
                 cursor.execute("SELECT 1 FROM DUAL")
             return conn
         except Exception as e:
-            logger.error(f"[OracleSQLProvider] Failed connecting to Oracle DB ({self.dsn}): {e}")
-            raise MetricsUnavailableError("OracleSQL", f"Cannot connect to Oracle instance at {self.dsn}", e)
+            logger.error(f"[OracleSQLProvider] Failed connecting to Oracle DB ({clean_dsn}): {e}")
+            raise MetricsUnavailableError("OracleSQL", f"Cannot connect to Oracle instance at {clean_dsn}", e)
 
     def health_check(self) -> bool:
         """Validates Oracle connectivity with a SELECT 1 FROM DUAL probe."""
@@ -384,13 +412,19 @@ def get_provider(config: Dict[str, Any]) -> MetricsProvider:
     logger.warning("=========================================================")
     
     oracle_user = config.get("ORACLE_USER", "monitor")
-    oracle_password = config.get("ORACLE_PASSWORD", "MonitorPass123#")
-    oracle_dsn = config.get("ORACLE_DSN", "localhost:1521/XE")
+    oracle_password = config.get("ORACLE_PASSWORD", "")
+    oracle_host = config.get("ORACLE_HOST", "10.73.34.37")
+    oracle_port = config.get("ORACLE_PORT", "1521")
+    oracle_service_name = config.get("ORACLE_SERVICE_NAME", "XEPDB1")
+    oracle_dsn = config.get("ORACLE_DSN", "")
     
     oracle_provider = OracleSQLProvider(
         user=oracle_user,
         password=oracle_password,
-        dsn=oracle_dsn
+        dsn=oracle_dsn,
+        host=oracle_host,
+        port=oracle_port,
+        service_name=oracle_service_name
     )
     
     if oracle_provider.health_check():

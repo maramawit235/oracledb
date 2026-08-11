@@ -25,10 +25,13 @@ app = FastAPI(
 
 # Load configuration
 config = {
-    "PROMETHEUS_URL": os.getenv("PROMETHEUS_URL", "http://localhost:9090"),
+    "PROMETHEUS_URL": os.getenv("PROMETHEUS_URL", ""),
+    "ORACLE_HOST": os.getenv("ORACLE_HOST", "10.73.34.37"),
+    "ORACLE_PORT": os.getenv("ORACLE_PORT", "1521"),
+    "ORACLE_SERVICE_NAME": os.getenv("ORACLE_SERVICE_NAME", "XEPDB1"),
     "ORACLE_USER": os.getenv("ORACLE_USER", "monitor"),
-    "ORACLE_PASSWORD": os.getenv("ORACLE_PASSWORD", "MonitorPass123#"),
-    "ORACLE_DSN": os.getenv("ORACLE_DSN", "localhost:1521/XE")
+    "ORACLE_PASSWORD": os.getenv("ORACLE_PASSWORD", ""),
+    "ORACLE_DSN": os.getenv("ORACLE_DSN", "")
 }
 
 scorer = HealthScorer(config_path="rules.yaml")
