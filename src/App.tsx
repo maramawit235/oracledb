@@ -8,6 +8,8 @@ import { AlertEngineTab } from "./components/AlertEngineTab";
 import { ReportTab } from "./components/ReportTab";
 import { ApiConsoleTab } from "./components/ApiConsoleTab";
 import { CodeExplorerTab } from "./components/CodeExplorerTab";
+import { AlertToastCenter } from "./components/AlertToastCenter";
+import { useAlertToasts } from "./hooks/useAlertToasts";
 import { HealthReportData } from "./types";
 import { Activity, Server, Terminal, Sliders, Bell, FileCode, Globe, Code2 } from "lucide-react";
 
@@ -18,6 +20,7 @@ export default function App() {
   const [activeProvider, setActiveProvider] = useState<string>("PrometheusProvider");
   const [healthData, setHealthData] = useState<HealthReportData | null>(null);
   const [metricsData, setMetricsData] = useState<any | null>(null);
+  const { toasts, dismissToast, dismissAll } = useAlertToasts(healthData);
 
   // Fetch live health evaluation
   const fetchHealth = async () => {
@@ -93,6 +96,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0c0c0d] text-[#e0e0e0] flex flex-col font-sans selection:bg-blue-500/30">
+      {/* Global alert popups — visible on every tab, independent of which view the DBA is looking at */}
+      <AlertToastCenter toasts={toasts} onDismiss={dismissToast} onDismissAll={dismissAll} />
       {/* Header */}
       <Header
         health={healthData}

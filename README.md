@@ -57,6 +57,22 @@ The suite automatically detects if Prometheus is reachable on `PROMETHEUS_URL`:
 - If **Prometheus is ONLINE**: Queries metrics via PromQL instant query API.
 - If **Prometheus is OFFLINE**: Automatically falls back to querying Oracle directly via thin-mode `python-oracledb` using the `monitor` account.
 
+### 5. Automatic Alerting (No Manual Trigger Required)
+`api.py` runs a background scheduler (APScheduler) that evaluates every rule and dispatches
+alerts on its own timer, independent of the dashboard being open or any endpoint being called.
+This is what lets a DBA step away from the screen without missing a breach.
+
+- Configure `MONITOR_INTERVAL_SECONDS` (default `60`) in `.env` to control how often the loop runs.
+- Configure `ALERT_COOLDOWN_SECONDS` (default `900` / 15 min) to control how often a *repeat*
+  breach of the same rule is allowed to re-alert. Escalation (WARNING → CRITICAL) always
+  bypasses the cooldown and fires immediately.
+- Notification channels are only registered if their credentials are present in `.env`:
+  `SLACK_WEBHOOK_URL`, or `SMTP_HOST` + `ALERT_RECIPIENT_EMAILS`, or `GENERIC_WEBHOOK_URL`.
+  If none are set, rules still get evaluated but nobody is notified — a warning is logged
+  at startup so this misconfiguration isn't silent.
+- Check `GET /alerts/status` at any time to confirm the loop is alive: it reports the last
+  cycle's timestamp, health score, alerts sent, and any error from the last run.
+
 ---
 
 ## Running Verification & Phase D Checks
@@ -93,6 +109,39 @@ Access Points:
 - **FastAPI REST Endpoints**: `http://localhost:8000/docs`
 - **Prometheus UI**: `http://localhost:9090`
 - **Exporter Raw Metrics**: `http://localhost:9161/metrics`
+
+---
+
+## Two Ways to View This Project
+
+This repo has two separate, independently runnable pieces — worth understanding up front:
+
+1. **The real backend (`api.py`)** — connects to an actual Oracle XE/19c instance (or Prometheus),
+   evaluates real rules, and runs the automatic background alerting loop described below. This is
+   the actual production deliverable.
+2. **The visual dashboard (`src/`, `server.ts`)** — a React demo UI with simulated metric
+   scenarios (NORMAL/WARNING/CRITICAL) for presenting the project's behavior without needing a
+   live bank database on hand. It does **not** call the real Python backend — it runs its own
+   mock evaluation in `server.ts`. Useful for demos; not proof the real pipeline works.
+
+### Running the real backend
+```bash
+pip install -r requirements.txt
+cp env.example .env        # fill in ORACLE_DSN and/or alert channel credentials
+python api.py               # or: uvicorn api:app --reload
+```
+Then visit:
+- `http://localhost:8000/docs` — interactive Swagger UI for every endpoint
+- `http://localhost:8000/health` — current health score and rule evaluation
+- `http://localhost:8000/alerts/status` — confirms the background monitoring loop is alive
+
+### Running the demo dashboard
+```bash
+npm install
+npm run dev
+```
+Then visit `http://localhost:3000` (or the port printed in the terminal) and use the scenario
+switcher to preview HEALTHY/DEGRADED/CRITICAL states without touching a real database.
 
 ---
 
