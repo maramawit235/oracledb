@@ -23,6 +23,7 @@ from alert_engine import AlertEngine, EmailNotificationChannel, GenericWebhookCh
 from providers import get_provider
 from report_generator import generate_html_report
 from rule_engine import HealthScorer
+import recipient_store
 
 load_dotenv()  # no-op if no .env is present (e.g. under docker-compose, which injects env vars directly)
 
@@ -74,7 +75,11 @@ def register_alert_channels(engine: AlertEngine) -> int:
 
     smtp_host = os.getenv("SMTP_HOST", "")
     recipients_raw = os.getenv("ALERT_RECIPIENT_EMAILS", "")
-    if smtp_host and recipients_raw:
+    if smtp_host:
+        # Static recipients are optional now -- the channel also merges in
+        # whatever recipient_store has at send time, so SMTP_HOST alone is
+        # enough to register the channel; a DBA can add themselves later
+        # via /alerts/recipients without anyone touching .env or restarting.
         recipients = [r.strip() for r in recipients_raw.split(",") if r.strip()]
         engine.add_channel(
             EmailNotificationChannel(
@@ -168,7 +173,7 @@ def read_root():
     return {
         "service": "Oracle Database Health Monitoring Suite",
         "status": "ONLINE",
-        "endpoints": ["/health", "/metrics", "/alerts", "/alerts/status", "/report"]
+        "endpoints": ["/health", "/metrics", "/alerts", "/alerts/status", "/alerts/recipients", "/alerts/recipients/manage", "/report"]
     }
 
 
@@ -228,6 +233,120 @@ def get_monitor_status():
         "registered_channels": len(alert_engine.channels),
         **monitor_state,
     }
+
+
+@app.get("/alerts/recipients")
+def list_alert_recipients():
+    """Lists everyone currently set up to receive email alerts: the static
+    baseline from .env plus anyone added dynamically via this API."""
+    static_recipients = [r.strip() for r in os.getenv("ALERT_RECIPIENT_EMAILS", "").split(",") if r.strip()]
+    dynamic_recipients = recipient_store.list_recipients()
+    return {
+        "static_recipients": static_recipients,
+        "dynamic_recipients": dynamic_recipients,
+    }
+
+
+@app.post("/alerts/recipients")
+def add_alert_recipient(payload: Dict[str, str]):
+    """Adds an email to the dynamic recipient list. Takes effect on the very
+    next monitoring cycle -- no restart needed."""
+    email = payload.get("email", "")
+    try:
+        record = recipient_store.add_recipient(email)
+        return {"added": record}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/alerts/recipients/{email}")
+def remove_alert_recipient(email: str):
+    """Removes an email from the dynamic recipient list. Does not affect the
+    static ALERT_RECIPIENT_EMAILS baseline from .env, which can only be
+    changed by editing .env directly (by design -- that's the "always notify"
+    safety net that shouldn't be removable by a self-service form)."""
+    removed = recipient_store.remove_recipient(email)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"'{email}' was not found in the dynamic recipient list.")
+    return {"removed": email}
+
+
+@app.get("/alerts/recipients/manage", response_class=HTMLResponse)
+def manage_alert_recipients_page():
+    """A small self-contained HTML form (no separate frontend build needed)
+    so a DBA can add or remove their own email without editing .env or
+    asking anyone to redeploy. Deliberately plain/dependency-free, matching
+    /report's approach of returning HTML straight from the API."""
+    static_recipients = [r.strip() for r in os.getenv("ALERT_RECIPIENT_EMAILS", "").split(",") if r.strip()]
+    dynamic_recipients = recipient_store.list_recipients()
+
+    static_rows = "".join(f"<li>{r} <span class='tag'>from .env (fixed)</span></li>" for r in static_recipients) or "<li class='empty'>None configured</li>"
+    dynamic_rows = "".join(
+        f"<li>{r['email']} <span class='tag'>added {r['added_at'][:10]}</span> "
+        f"<button onclick=\"removeRecipient('{r['email']}')\">Remove</button></li>"
+        for r in dynamic_recipients
+    ) or "<li class='empty'>No one has self-added yet</li>"
+
+    return f"""
+    <html>
+    <head>
+        <title>OHIS Alert Recipients</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; max-width: 640px; margin: 40px auto; color: #222; }}
+            h2 {{ margin-bottom: 4px; }}
+            p.sub {{ color: #666; margin-top: 0; }}
+            ul {{ list-style: none; padding: 0; }}
+            li {{ padding: 8px 0; border-bottom: 1px solid #eee; }}
+            li.empty {{ color: #999; font-style: italic; }}
+            .tag {{ color: #888; font-size: 12px; margin-left: 8px; }}
+            input[type=email] {{ padding: 8px; width: 260px; margin-right: 8px; }}
+            button {{ padding: 8px 14px; cursor: pointer; }}
+            #status {{ margin-top: 10px; font-size: 13px; }}
+        </style>
+    </head>
+    <body>
+        <h2>Oracle DB Health Alert Recipients</h2>
+        <p class="sub">Add or remove your email to receive WARNING/CRITICAL alerts. Takes effect on the next monitoring cycle -- no restart needed.</p>
+
+        <h3>Fixed recipients (set in .env by an admin)</h3>
+        <ul>{static_rows}</ul>
+
+        <h3>Self-added recipients</h3>
+        <ul id="dynamic-list">{dynamic_rows}</ul>
+
+        <form onsubmit="return addRecipient(event)">
+            <input type="email" id="email-input" placeholder="your.name@bankofabyssinia.com" required />
+            <button type="submit">Add me</button>
+        </form>
+        <div id="status"></div>
+
+        <script>
+            async function addRecipient(e) {{
+                e.preventDefault();
+                const email = document.getElementById('email-input').value;
+                const res = await fetch('/alerts/recipients', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ email }})
+                }});
+                const body = await res.json();
+                document.getElementById('status').textContent = res.ok
+                    ? `Added ${{email}}. Reload the page to see it in the list.`
+                    : `Error: ${{body.detail}}`;
+                return false;
+            }}
+            async function removeRecipient(email) {{
+                const res = await fetch(`/alerts/recipients/${{encodeURIComponent(email)}}`, {{ method: 'DELETE' }});
+                if (res.ok) {{ location.reload(); }}
+                else {{
+                    const body = await res.json();
+                    document.getElementById('status').textContent = `Error: ${{body.detail}}`;
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
 
 
 @app.get("/report", response_class=HTMLResponse)

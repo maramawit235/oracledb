@@ -76,18 +76,43 @@ class SlackNotificationChannel(NotificationChannel):
 
 
 class EmailNotificationChannel(NotificationChannel):
-    """Notification channel delivering HTML emails via SMTP server."""
+    """Notification channel delivering HTML emails via SMTP server.
+
+    Recipients come from two sources merged at SEND TIME (not just once at
+    startup): the static `recipients` list (from ALERT_RECIPIENT_EMAILS in
+    .env) plus whatever recipient_store.list_recipient_emails() returns.
+    This is what lets a DBA add/remove their own email via the self-service
+    endpoints without restarting the app -- the next alert just picks it up.
+    """
 
     def __init__(self, smtp_host: str, smtp_port: int, sender: str, recipients: List[str], username: str = "", password: str = ""):
         self.smtp_host = smtp_host
         self.smtp_port = smtp_port
         self.sender = sender
-        self.recipients = recipients
+        self.recipients = recipients  # static baseline from .env
         self.username = username
         self.password = password
 
+    def _effective_recipients(self) -> List[str]:
+        try:
+            import recipient_store
+            dynamic = recipient_store.list_recipient_emails()
+        except Exception as e:
+            logger.error(f"[EmailChannel] Failed to load dynamic recipients, using static list only: {e}")
+            dynamic = []
+        # Merge, dedup case-insensitively, preserve order (static first)
+        seen = set()
+        merged = []
+        for email in list(self.recipients) + dynamic:
+            key = email.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(email.strip())
+        return merged
+
     def send_alert(self, rule_result: RuleResult, health_score: float) -> bool:
-        if not self.smtp_host or not self.recipients:
+        recipients = self._effective_recipients()
+        if not self.smtp_host or not recipients:
             logger.debug("[EmailChannel] SMTP host or recipients not configured. Skipping email.")
             return False
 
@@ -115,15 +140,15 @@ class EmailNotificationChannel(NotificationChannel):
         msg = MIMEText(html_body, "html")
         msg["Subject"] = subject
         msg["From"] = self.sender
-        msg["To"] = ", ".join(self.recipients)
+        msg["To"] = ", ".join(recipients)
 
         try:
             with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=5) as server:
                 if self.username and self.password:
                     server.starttls()
                     server.login(self.username, self.password)
-                server.sendmail(self.sender, self.recipients, msg.as_string())
-            logger.info(f"[EmailChannel] Email alert sent to {self.recipients} for {rule_result.rule_id}.")
+                server.sendmail(self.sender, recipients, msg.as_string())
+            logger.info(f"[EmailChannel] Email alert sent to {recipients} for {rule_result.rule_id}.")
             return True
         except Exception as e:
             logger.error(f"[EmailChannel] SMTP delivery error: {e}")

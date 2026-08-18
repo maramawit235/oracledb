@@ -116,7 +116,10 @@ class TestRegisterAlertChannels:
         assert isinstance(channel, EmailNotificationChannel)
         assert channel.recipients == ["dba@boa.test", "oncall@boa.test"]
 
-    def test_skips_email_when_recipients_missing(self, monkeypatch):
+    def test_registers_email_with_smtp_host_even_if_static_recipients_missing(self, monkeypatch):
+        # Static recipients are now optional -- the channel still registers
+        # as long as SMTP_HOST is set, because recipients can also come from
+        # the self-service recipient_store at send time (no restart needed).
         monkeypatch.setenv("SMTP_HOST", "smtp.boa.test")
         monkeypatch.delenv("ALERT_RECIPIENT_EMAILS", raising=False)
         monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
@@ -124,7 +127,10 @@ class TestRegisterAlertChannels:
 
         count = api.register_alert_channels(api.alert_engine)
 
-        assert count == 0
+        assert count == 1
+        channel = api.alert_engine.channels[0]
+        assert isinstance(channel, EmailNotificationChannel)
+        assert channel.recipients == []  # no static baseline, dynamic-only
 
     def test_registers_all_three_when_fully_configured(self, monkeypatch):
         monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.test/abc")
