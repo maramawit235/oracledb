@@ -16,18 +16,18 @@ rules:
     name: "USERS Tablespace Capacity"
     metric_type: "tablespace"
     target: "USERS"
-    warning_threshold: 85.0
-    critical_threshold: 95.0
+    warning_threshold: 80.0
+    critical_threshold: 90.0
     weight: 25.0
     unit: "%"
-    recommendation: "Resize datafile or add new datafile to USERS tablespace. Purge or compress historical partition data."
+    recommendation: "Add datafile or increase available storage. Investigate object growth and purge or compress historical data."
 
   - id: "RULE_TABLESPACE_SYSTEM"
     name: "SYSTEM Tablespace Capacity"
     metric_type: "tablespace"
     target: "SYSTEM"
-    warning_threshold: 85.0
-    critical_threshold: 92.0
+    warning_threshold: 80.0
+    critical_threshold: 90.0
     weight: 20.0
     unit: "%"
     recommendation: "Investigate audit trail growth (AUD$) or system object fragmentation. Do not allow SYSTEM tablespace to fill up."
@@ -36,21 +36,21 @@ rules:
     name: "Active Database Sessions"
     metric_type: "active_sessions"
     target: "global"
-    warning_threshold: 25.0
-    critical_threshold: 50.0
+    warning_threshold: 40.0
+    critical_threshold: 80.0
     weight: 20.0
     unit: "sessions"
-    recommendation: "Check V$SESSION for unindexed queries, runaway loops, or connection pool leakage from application servers."
+    recommendation: "Check V$SESSION for runaway queries, unindexed full table scans, or connection pool leakage from application servers."
 
   - id: "RULE_BLOCKED_SESSIONS"
     name: "Row Lock / Enqueue Contention"
     metric_type: "blocked_sessions"
     target: "global"
     warning_threshold: 1.0
-    critical_threshold: 5.0
+    critical_threshold: 3.0
     weight: 25.0
     unit: "blocked sessions"
-    recommendation: "Identify blocking SID via V$LOCK and consider terminating blocking uncommitted session (ALTER SYSTEM KILL SESSION)."
+    recommendation: "Identify blocking SID via V$LOCK / V$SESSION. Investigate uncommitted transactions and consider terminating blocking session."
 
   - id: "RULE_WAIT_EVENT_LATENCY"
     name: "Top System Wait Event Latency"

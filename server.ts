@@ -103,19 +103,19 @@ function evaluateHealthRules(metrics: ReturnType<typeof getSimulatedMetrics>) {
       name: "USERS Tablespace Capacity",
       metric_type: "tablespace",
       target: "USERS",
-      warn_t: 85.0,
-      crit_t: 95.0,
+      warn_t: 80.0,
+      crit_t: 90.0,
       weight: 25.0,
       unit: "%",
-      rec: "Resize datafile or add new datafile to USERS tablespace. Purge or compress historical partition data."
+      rec: "Add datafile or increase available storage. Investigate object growth and purge or compress historical data."
     },
     {
       id: "RULE_TABLESPACE_SYSTEM",
       name: "SYSTEM Tablespace Capacity",
       metric_type: "tablespace",
       target: "SYSTEM",
-      warn_t: 85.0,
-      crit_t: 92.0,
+      warn_t: 80.0,
+      crit_t: 90.0,
       weight: 20.0,
       unit: "%",
       rec: "Investigate audit trail growth (AUD$) or system object fragmentation. Do not allow SYSTEM tablespace to fill up."
@@ -125,11 +125,11 @@ function evaluateHealthRules(metrics: ReturnType<typeof getSimulatedMetrics>) {
       name: "Active Database Sessions",
       metric_type: "active_sessions",
       target: "global",
-      warn_t: 25.0,
-      crit_t: 50.0,
+      warn_t: 40.0,
+      crit_t: 80.0,
       weight: 20.0,
       unit: "sessions",
-      rec: "Check V$SESSION for unindexed queries, runaway loops, or connection pool leakage from application servers."
+      rec: "Check V$SESSION for runaway queries, unindexed full table scans, or connection pool leakage from application servers."
     },
     {
       id: "RULE_BLOCKED_SESSIONS",
@@ -137,10 +137,10 @@ function evaluateHealthRules(metrics: ReturnType<typeof getSimulatedMetrics>) {
       metric_type: "blocked_sessions",
       target: "global",
       warn_t: 1.0,
-      crit_t: 5.0,
+      crit_t: 3.0,
       weight: 25.0,
       unit: "blocked sessions",
-      rec: "Identify blocking SID via V$LOCK and consider terminating blocking uncommitted session (ALTER SYSTEM KILL SESSION)."
+      rec: "Identify blocking SID via V$LOCK / V$SESSION. Investigate uncommitted transactions and consider terminating blocking session."
     },
     {
       id: "RULE_WAIT_EVENT_LATENCY",
@@ -348,6 +348,68 @@ app.post("/api/alerts/test", (req, res) => {
     cooldown_active: false,
     message: `Alert dispatched successfully via ${channel} for ${targetRule.rule_name}.`
   });
+});
+
+// Dynamic recipients storage in server.ts
+const recipientsStorePath = path.join(process.cwd(), "data", "alert_recipients.json");
+
+function getDynamicRecipients(): Array<{ email: string; added_at: string }> {
+  try {
+    if (fs.existsSync(recipientsStorePath)) {
+      const data = JSON.parse(fs.readFileSync(recipientsStorePath, "utf-8"));
+      if (Array.isArray(data)) return data;
+    }
+  } catch (e) {
+    console.error("Error reading alert_recipients.json", e);
+  }
+  return [];
+}
+
+function saveDynamicRecipients(recipients: Array<{ email: string; added_at: string }>) {
+  try {
+    const dir = path.dirname(recipientsStorePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(recipientsStorePath, JSON.stringify(recipients, null, 2));
+  } catch (e) {
+    console.error("Error writing alert_recipients.json", e);
+  }
+}
+
+app.get("/api/alerts/recipients", (req, res) => {
+  const staticRaw = process.env.ALERT_RECIPIENT_EMAILS || "dba-team@bankofabyssinia.com, oncall-lead@bankofabyssinia.com";
+  const staticRecipients = staticRaw.split(",").map((r) => r.trim()).filter(Boolean);
+  const dynamicRecipients = getDynamicRecipients();
+  res.json({
+    static_recipients: staticRecipients,
+    dynamic_recipients: dynamicRecipients
+  });
+});
+
+app.post("/api/alerts/recipients", (req, res) => {
+  const { email } = req.body;
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ detail: "Invalid email address." });
+  }
+  const cleanEmail = email.trim();
+  const list = getDynamicRecipients();
+  if (list.some((r) => r.email.toLowerCase() === cleanEmail.toLowerCase())) {
+    return res.json({ added: list.find((r) => r.email.toLowerCase() === cleanEmail.toLowerCase()) });
+  }
+  const record = { email: cleanEmail, added_at: new Date().toISOString() };
+  list.push(record);
+  saveDynamicRecipients(list);
+  res.json({ added: record });
+});
+
+app.delete("/api/alerts/recipients/:email", (req, res) => {
+  const email = (req.params.email || "").toLowerCase();
+  const list = getDynamicRecipients();
+  const filtered = list.filter((r) => r.email.toLowerCase() !== email);
+  if (filtered.length === list.length) {
+    return res.status(404).json({ detail: `Recipient '${email}' not found.` });
+  }
+  saveDynamicRecipients(filtered);
+  res.json({ removed: req.params.email });
 });
 
 app.get("/api/report/html", (req, res) => {

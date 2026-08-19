@@ -13,7 +13,10 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 from providers import MetricsProvider
 

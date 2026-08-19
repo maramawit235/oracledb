@@ -13,7 +13,10 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # Set up module logger
 logger = logging.getLogger(__name__)

@@ -8,6 +8,7 @@ Author: Bank of Abyssinia DB Monitoring Team
 """
 
 import datetime
+import html
 from typing import Any, Dict, List
 
 from rule_engine import HealthReport
@@ -24,11 +25,11 @@ def generate_html_report(report: HealthReport, metrics: Dict[str, Any]) -> str:
         sev_class = "badge-ok" if r.severity == "OK" else ("badge-warn" if r.severity == "WARNING" else "badge-crit")
         rule_rows_html += f"""
         <tr>
-            <td><strong>{r.rule_name}</strong><br/><small style="color:#666">{r.rule_id}</small></td>
-            <td>{r.current_value} {r.unit}</td>
-            <td>Warn: {r.warning_threshold}{r.unit} | Crit: {r.critical_threshold}{r.unit}</td>
-            <td><span class="badge {sev_class}">{r.severity}</span></td>
-            <td>{r.recommendation}</td>
+            <td><strong>{html.escape(str(r.rule_name))}</strong><br/><small style="color:#666">{html.escape(str(r.rule_id))}</small></td>
+            <td>{r.current_value} {html.escape(str(r.unit))}</td>
+            <td>Warn: {r.warning_threshold}{html.escape(str(r.unit))} | Crit: {r.critical_threshold}{html.escape(str(r.unit))}</td>
+            <td><span class="badge {sev_class}">{html.escape(str(r.severity))}</span></td>
+            <td>{html.escape(str(r.recommendation))}</td>
         </tr>
         """
 
@@ -40,7 +41,7 @@ def generate_html_report(report: HealthReport, metrics: Dict[str, Any]) -> str:
         tablespace_html += f"""
         <div style="margin-bottom: 12px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-weight:bold;">
-                <span>{ts['name']}</span>
+                <span>{html.escape(str(ts['name']))}</span>
                 <span>{pct}% Used ({ts['free_mb']} MB Free)</span>
             </div>
             <div style="background:#e9ecef; border-radius:4px; height:18px; width:100%; overflow:hidden;">
@@ -49,7 +50,7 @@ def generate_html_report(report: HealthReport, metrics: Dict[str, Any]) -> str:
         </div>
         """
 
-    html = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -80,11 +81,11 @@ def generate_html_report(report: HealthReport, metrics: Dict[str, Any]) -> str:
         <div class="header">
             <div class="title">
                 <h1>Oracle DB Executive Health & Performance Report</h1>
-                <p>Bank of Abyssinia Oracle 19c & XE Monitoring Suite | Evaluated: {report.evaluated_at}</p>
+                <p>Bank of Abyssinia Oracle 19c & XE Monitoring Suite | Evaluated: {html.escape(str(report.evaluated_at))}</p>
             </div>
             <div class="score-box">
                 <div class="score-num">{report.health_score} <span style="font-size:18px; color:#999;">/100</span></div>
-                <div class="status-badge">{report.status}</div>
+                <div class="status-badge">{html.escape(str(report.status))}</div>
             </div>
         </div>
 
@@ -118,4 +119,4 @@ def generate_html_report(report: HealthReport, metrics: Dict[str, Any]) -> str:
 </body>
 </html>
 """
-    return html
+    return html_content
